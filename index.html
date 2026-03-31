@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Rock · Paper · Scissors — Mirror Edition</title>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:    #07070d;
+  --panel: #0e0e1a;
+  --bord:  #1c1c30;
+  --acc1:  #ff3d3d;
+  --acc2:  #3dffb0;
+  --acc3:  #ffc93d;
+  --txt:   #eaeaf5;
+  --mut:   #44445a;
+  --win:   #3dffb0;
+  --lose:  #ff3d3d;
+  --draw:  #ffc93d;
+  --fd:    'Bebas Neue', sans-serif;
+  --fm:    'Space Mono', monospace;
+}
+
+html, body {
+  height: 100%; background: var(--bg);
+  color: var(--txt); font-family: var(--fm);
+  overflow: hidden;
+}
+
+body::after {
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 9999;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+  background-size: 256px; opacity: .5;
+}
+
+/* ══ SHELL ══════════════════════════════════════════════════
+   Full-height column: header → arena (flex:1) → footer rows
+══════════════════════════════════════════════════════════ */
+.shell {
+  display: flex; flex-direction: column;
+  height: 100vh; padding: 10px 12px 10px; gap: 8px;
+}
+
+/* ══ HEADER ═════════════════════════════════════════════════ */
+header {
+  display: flex; align-items: center;
+  justify-content: space-between; flex-shrink: 0; gap: 10px;
+  flex-wrap: wrap;
+}
+.logo {
+  font-family: var(--fd);
+  font-size: clamp(1.6rem, 4.5vw, 3.8rem);
+  letter-spacing: .07em; line-height: 1;
+  background: linear-gradient(90deg, var(--acc1), var(--acc3), var(--acc2));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  filter: drop-shadow(0 0 14px #ff3d3d44);
+  white-space: nowrap;
+}
+.sub { font-size: .48rem; letter-spacing: .16em; color: var(--mut); margin-top: 2px; text-transform: uppercase; }
+
+.scorebar { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.sbox {
+  background: var(--panel); border: 1px solid var(--bord);
+  border-radius: 10px; padding: 6px 14px; text-align: center; min-width: 68px;
+}
+.sbox .lbl { font-size: .42rem; letter-spacing: .18em; color: var(--mut); margin-bottom: 2px; }
+.sbox .val { font-family: var(--fd); font-size: 1.9rem; line-height: 1; transition: transform .2s; }
+.sbox.wins  .val { color: var(--win);  text-shadow: 0 0 16px #3dffb055; }
+.sbox.loses .val { color: var(--lose); text-shadow: 0 0 16px #ff3d3d55; }
+.sbox .val.bump { animation: bump .3s cubic-bezier(.34,1.56,.64,1); }
+@keyframes bump { 0%,100%{transform:scale(1)} 50%{transform:scale(1.55)} }
+
+.mbar-wrap {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--panel); border: 1px solid var(--bord);
+  border-radius: 10px; padding: 6px 12px;
+}
+.mbar-wrap .lbl { font-size: .42rem; letter-spacing: .15em; color: var(--mut); white-space: nowrap; }
+.mbar { flex: 1; min-width: 80px; height: 5px; background: var(--bord); border-radius: 99px; overflow: hidden; }
+.mbar-fill {
+  height: 100%; border-radius: 99px;
+  background: linear-gradient(90deg, var(--acc2), var(--acc3));
+  width: 0%; transition: width .5s ease;
+}
+.rnum { font-family: var(--fd); font-size: 1.1rem; color: var(--acc3); min-width: 30px; text-align: right; }
+
+/* ══ ARENA ══════════════════════════════════════════════════
+   Two equal panels side-by-side, growing to fill all space
+══════════════════════════════════════════════════════════ */
+.arena {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ══ PANEL CARD ═════════════════════════════════════════════ */
+.pcard {
+  background: var(--panel); border: 1px solid var(--bord);
+  border-radius: 16px; overflow: hidden;
+  display: flex; flex-direction: column;
+  min-height: 0;
+  transition: box-shadow .4s, border-color .4s;
+}
+.pcard.gw { box-shadow: 0 0 55px #3dffb044; border-color: var(--win); }
+.pcard.gl { box-shadow: 0 0 55px #ff3d3d44; border-color: var(--lose); }
+.pcard.gd { box-shadow: 0 0 55px #ffc93d44; border-color: var(--draw); }
+
+.plabel {
+  font-size: .5rem; letter-spacing: .22em; color: var(--mut);
+  padding: 8px 12px 6px; border-bottom: 1px solid var(--bord);
+  text-transform: uppercase; flex-shrink: 0;
+}
+
+/* camera */
+.cam-wrap { position: relative; flex: 1; background: #000; min-height: 0; }
+#videoEl  { width: 100%; height: 100%; object-fit: cover; display: block; transform: scaleX(-1); }
+#handCanvas { position: absolute; inset: 0; width: 100%; height: 100%; transform: scaleX(-1); pointer-events: none; }
+
+.hbadge {
+  position: absolute; bottom: 8px; left: 8px;
+  background: #00000099; border: 1px solid var(--bord);
+  border-radius: 6px; padding: 4px 9px;
+  font-size: .56rem; letter-spacing: .08em; backdrop-filter: blur(8px); transition: all .3s;
+}
+.hbadge.det   { border-color: var(--win);  color: var(--win); }
+.hbadge.nodet { border-color: var(--lose); color: var(--lose); }
+
+/* gesture strip */
+.gstrip {
+  padding: 8px 12px; display: flex; align-items: center;
+  justify-content: space-between; border-top: 1px solid var(--bord);
+  flex-shrink: 0;
+}
+.gname  { font-family: var(--fd); font-size: clamp(1.1rem, 2.8vw, 2.2rem); letter-spacing: .05em; transition: color .3s; }
+.gemoji { font-size: clamp(1.4rem, 3.5vw, 2.8rem); line-height: 1; filter: drop-shadow(0 0 8px #fff3); }
+
+/* AI face */
+.ai-face {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  background: radial-gradient(ellipse at center, #181830 0%, #07070d 75%);
+  position: relative; overflow: hidden; min-height: 0;
+}
+.ai-face::before {
+  content: ''; position: absolute; width: 65%; height: 65%; border-radius: 50%;
+  background: radial-gradient(circle, #ffffff06 0%, transparent 70%);
+  animation: pulse 3s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100%{transform:scale(.88);opacity:.5} 50%{transform:scale(1.1);opacity:1} }
+
+.ai-emoji {
+  font-size: clamp(4rem, 12vw, 10rem);
+  line-height: 1; position: relative; z-index: 1;
+  filter: drop-shadow(0 0 28px #fff2);
+}
+.ai-emoji.pop { animation: ai-pop .45s cubic-bezier(.34,1.56,.64,1); }
+@keyframes ai-pop { 0%{transform:scale(0) rotate(-20deg)} 100%{transform:scale(1) rotate(0)} }
+
+.ai-think {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: #07070dcc; font-size: .65rem; letter-spacing: .2em; color: var(--mut);
+  opacity: 0; transition: opacity .3s; pointer-events: none; text-transform: uppercase;
+}
+.ai-think.show { opacity: 1; }
+
+/* ══ CENTRE STRIP ═══════════════════════════════════════════
+   Compact info bar between arena and footer
+══════════════════════════════════════════════════════════ */
+.centre-strip {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-shrink: 0;
+  background: var(--panel); border: 1px solid var(--bord);
+  border-radius: 12px; padding: 8px 16px;
+}
+.vs { font-family: var(--fd); font-size: clamp(1.2rem, 3.5vw, 2rem); letter-spacing: .12em; color: var(--mut); flex-shrink: 0; }
+.rbanner {
+  font-family: var(--fd); font-size: clamp(1.3rem, 4vw, 2.2rem); letter-spacing: .07em;
+  text-align: center; line-height: 1; transition: color .3s; flex: 1;
+}
+.rbanner.w { color: var(--win);  text-shadow: 0 0 26px #3dffb066; }
+.rbanner.l { color: var(--lose); text-shadow: 0 0 26px #ff3d3d66; }
+.rbanner.d { color: var(--draw); text-shadow: 0 0 26px #ffc93d66; }
+.rinfo {
+  font-size: clamp(.42rem, 1.1vw, .6rem); letter-spacing: .07em; color: var(--mut);
+  text-align: right; line-height: 1.5; flex-shrink: 0; max-width: 38%;
+}
+
+/* ══ HISTORY ════════════════════════════════════════════════ */
+.hist-row { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+.hist-lbl { font-size: .44rem; letter-spacing: .2em; color: var(--mut); text-transform: uppercase; }
+.hist-strip { display: flex; gap: 4px; flex-wrap: wrap; }
+.hchip {
+  display: flex; align-items: center; gap: 3px;
+  background: var(--panel); border: 1px solid var(--bord);
+  border-radius: 5px; padding: 2px 7px; font-size: .62rem;
+  animation: chip-in .3s ease-out;
+}
+@keyframes chip-in { from{transform:translateY(5px);opacity:0} to{transform:translateY(0);opacity:1} }
+.hchip.w { border-color: #3dffb030; }
+.hchip.l { border-color: #ff3d3d30; }
+.hchip.d { border-color: #ffc93d30; }
+
+/* ══ LEGEND ═════════════════════════════════════════════════ */
+.legend { display: flex; gap: 14px; font-size: .52rem; color: var(--mut); letter-spacing: .07em; flex-shrink: 0; flex-wrap: wrap; }
+.legend span { color: var(--txt); }
+
+/* ══ OVERLAYS ═══════════════════════════════════════════════ */
+.ov {
+  position: fixed; inset: 0; z-index: 500;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: #07070de8; backdrop-filter: blur(6px);
+  opacity: 0; pointer-events: none; transition: opacity .35s;
+}
+.ov.show { opacity: 1; pointer-events: all; }
+
+.ring-wrap { position: relative; width: 180px; height: 180px; margin-bottom: 22px; }
+.ring-svg  { width: 180px; height: 180px; transform: rotate(-90deg); }
+.ring-bg   { fill: none; stroke: var(--bord); stroke-width: 9; }
+.ring-prog {
+  fill: none; stroke: url(#rg); stroke-width: 9; stroke-linecap: round;
+  stroke-dasharray: 534; stroke-dashoffset: 534; transition: stroke-dashoffset 1s linear;
+}
+.ring-num {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-family: var(--fd); font-size: 5rem; line-height: 1;
+  background: linear-gradient(135deg, var(--acc1), var(--acc3));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+}
+.ov-title { font-family: var(--fd); font-size: clamp(1.8rem, 5vw, 3.4rem); letter-spacing: .1em; margin-bottom: 7px; text-align: center; }
+.ov-sub   { font-size: .65rem; letter-spacing: .17em; color: var(--mut); text-align: center; }
+
+.call-word {
+  font-family: var(--fd); font-size: clamp(5rem, 20vw, 14rem);
+  letter-spacing: .04em; line-height: 1; text-align: center;
+  animation: wslam .35s cubic-bezier(.22,.68,0,1.2);
+}
+@keyframes wslam { 0%{transform:scale(2.4);opacity:0} 100%{transform:scale(1);opacity:1} }
+.call-word.rock     { color: var(--acc1); text-shadow: 0 0 70px #ff3d3d55; }
+.call-word.paper    { color: var(--acc3); text-shadow: 0 0 70px #ffc93d55; }
+.call-word.scissors { color: var(--acc2); text-shadow: 0 0 70px #3dffb055; }
+.call-word.shoot    { color: #fff;        text-shadow: 0 0 80px #ffffff55; }
+
+.go-crown { font-size: 6rem; line-height: 1; margin-bottom: 14px; animation: crown-drop .6s cubic-bezier(.34,1.56,.64,1); }
+@keyframes crown-drop { 0%{transform:translateY(-60px) scale(0);opacity:0} 100%{transform:none;opacity:1} }
+.go-title { font-family: var(--fd); font-size: clamp(3rem, 11vw, 8rem); letter-spacing: .07em; margin-bottom: 5px; text-align: center; }
+.go-title.vic { color: var(--win);  text-shadow: 0 0 60px #3dffb066; }
+.go-title.def { color: var(--lose); text-shadow: 0 0 60px #ff3d3d66; }
+.go-score { font-family: var(--fd); font-size: 2.2rem; color: var(--mut); letter-spacing: .12em; margin-bottom: 28px; }
+.go-rlbl  { font-size: .62rem; letter-spacing: .2em; color: var(--mut); text-transform: uppercase; }
+.go-rbar  { width: 200px; height: 4px; background: var(--bord); border-radius: 99px; margin: 8px auto 0; overflow: hidden; }
+.go-rfill { height: 100%; background: var(--acc3); border-radius: 99px; width: 0%; transition: width linear; }
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <header>
+    <div>
+      <div class="logo">Rock · Paper · Scissors</div>
+      <div class="sub">✦ Magic Mirror Edition &nbsp;·&nbsp; Hands-Free &nbsp;·&nbsp; First to 10 Wins ✦</div>
+    </div>
+    <div class="scorebar">
+      <div class="sbox wins">
+        <div class="lbl">Your Wins</div>
+        <div class="val" id="sWin">0</div>
+      </div>
+      <div class="sbox loses">
+        <div class="lbl">AI Wins</div>
+        <div class="val" id="sLose">0</div>
+      </div>
+      <div class="mbar-wrap">
+        <div class="lbl">First to 10</div>
+        <div class="mbar"><div class="mbar-fill" id="mbarFill"></div></div>
+        <div class="rnum" id="rnum">0/10</div>
+      </div>
+    </div>
+  </header>
+
+  <div class="arena">
+
+    <!-- Player -->
+    <div class="pcard" id="playerPanel">
+      <div class="plabel">🖐 Your Hand</div>
+      <div class="cam-wrap">
+        <video id="videoEl" autoplay playsinline muted></video>
+        <canvas id="handCanvas"></canvas>
+        <div class="hbadge nodet" id="hbadge">No Hand Detected</div>
+      </div>
+      <div class="gstrip">
+        <div class="gname" id="pName" style="color:var(--mut)">—</div>
+        <div class="gemoji" id="pEmoji">👋</div>
+      </div>
+    </div>
+
+    <!-- AI -->
+    <div class="pcard" id="aiPanel">
+      <div class="plabel">🤖 AI Opponent</div>
+      <div class="ai-face">
+        <div class="ai-think" id="aiThink">Thinking…</div>
+        <div class="ai-emoji" id="aiEmoji">🤖</div>
+      </div>
+      <div class="gstrip">
+        <div class="gname" id="aName" style="color:var(--mut)">—</div>
+        <div class="gemoji" id="aEmoji">🤖</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Centre info strip -->
+  <div class="centre-strip">
+    <div class="vs">VS</div>
+    <div class="rbanner" id="rbanner"></div>
+    <div class="rinfo" id="rinfo">Game starts soon…</div>
+  </div>
+
+  <div class="hist-row">
+    <div class="hist-lbl">Match History</div>
+    <div class="hist-strip" id="histStrip"></div>
+  </div>
+
+  <div class="legend">
+    <div>✊ <span>Rock</span> — Closed fist</div>
+    <div>🖐 <span>Paper</span> — Open hand</div>
+    <div>✌️ <span>Scissors</span> — Two fingers up</div>
+  </div>
+
+</div>
+
+<!-- Startup overlay -->
+<div class="ov show" id="ovStart">
+  <div class="ov-title">GET READY TO PLAY</div>
+  <div class="ov-sub" style="margin-bottom:24px">Show your hand to the camera · First to 10 wins!</div>
+  <div class="ring-wrap">
+    <svg class="ring-svg" viewBox="0 0 190 190">
+      <defs>
+        <linearGradient id="rg" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%"   stop-color="#ff3d3d"/>
+          <stop offset="50%"  stop-color="#ffc93d"/>
+          <stop offset="100%" stop-color="#3dffb0"/>
+        </linearGradient>
+      </defs>
+      <circle class="ring-bg"   cx="95" cy="95" r="85"/>
+      <circle class="ring-prog" id="ringProg" cx="95" cy="95" r="85"/>
+    </svg>
+    <div class="ring-num" id="ringNum">10</div>
+  </div>
+  <div class="ov-sub">✊ Rock &nbsp;·&nbsp; 🖐 Paper &nbsp;·&nbsp; ✌️ Scissors</div>
+</div>
+
+<!-- Round call overlay -->
+<div class="ov" id="ovCall">
+  <div class="call-word" id="callWord"></div>
+</div>
+
+<!-- Game over overlay -->
+<div class="ov" id="ovGameOver">
+  <div class="go-crown" id="goCrown">🏆</div>
+  <div class="go-title" id="goTitle"></div>
+  <div class="go-score" id="goScore"></div>
+  <div class="go-rlbl">Next match starts in</div>
+  <div class="go-rbar"><div class="go-rfill" id="goRFill"></div></div>
+</div>
+
+<script>
+/* ══ CONFIG ════════════════════════════════════════════════ */
+const MAX_PTS      = 10;
+const STARTUP_SEC  = 10;
+const RESULT_SEC   = 3.5;
+const RESTART_SEC  = 8;
+const CIRCUM       = 2 * Math.PI * 85; // ≈ 534
+
+const MOVES = ['rock','paper','scissors'];
+const EMOJI = { rock:'✊', paper:'🖐', scissors:'✌️' };
+const COL   = { rock:'var(--acc1)', paper:'var(--acc3)', scissors:'var(--acc2)' };
+
+/* ══ STATE ═════════════════════════════════════════════════ */
+let score = {win:0,lose:0};
+let history = [];
+let isPlaying = false, currentGesture = null;
+
+/* ══ SPEECH ════════════════════════════════════════════════ */
+
+
+/* ══ MEDIAPIPE ═════════════════════════════════════════════ */
+const videoEl    = document.getElementById('videoEl');
+const handCanvas = document.getElementById('handCanvas');
+const ctx        = handCanvas.getContext('2d');
+
+function resizeCv() {
+  handCanvas.width  = handCanvas.offsetWidth;
+  handCanvas.height = handCanvas.offsetHeight;
+}
+window.addEventListener('resize', resizeCv);
+
+const hands = new Hands({ locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+hands.setOptions({ maxNumHands:1, modelComplexity:1, minDetectionConfidence:.72, minTrackingConfidence:.65 });
+hands.onResults(onHands);
+
+navigator.mediaDevices.getUserMedia({ video:{width:1280,height:720,facingMode:'user'} })
+  .then(s=>{
+    videoEl.srcObject=s;
+    videoEl.onloadedmetadata=()=>{
+      setTimeout(resizeCv,400);
+      new Camera(videoEl,{
+        onFrame: async()=>{ await hands.send({image:videoEl}); },
+        width:1280, height:720
+      }).start();
+    };
+  }).catch(()=>{
+    setBadge(false);
+    document.getElementById('hbadge').textContent='⚠ Camera unavailable';
+  });
+
+function onHands(res) {
+  ctx.clearRect(0,0,handCanvas.width,handCanvas.height);
+  if (!res.multiHandLandmarks?.length) { setGesture(null); return; }
+  const lm = res.multiHandLandmarks[0];
+  drawConnectors(ctx,lm,HAND_CONNECTIONS,{color:'#3dffb044',lineWidth:2});
+  drawLandmarks(ctx,lm,{color:'#3dffb0',lineWidth:1,radius:4});
+  setGesture(classify(lm));
+}
+
+/* ══ CLASSIFY ══════════════════════════════════════════════
+   Robust dual-method classifier:
+   1) tip-vs-PIP height  (pose)
+   2) tip-to-wrist curl  (distance)
+   Rock requires ALL four fingers curled on both metrics.
+══════════════════════════════════════════════════════════ */
+function dist3(a,b){ return Math.hypot(a.x-b.x, a.y-b.y, (a.z||0)-(b.z||0)); }
+
+function classify(lm) {
+  const wrist   = lm[0];
+  const palmRef = lm[9]; // middle MCP — stable palm centre
+  const palmSz  = dist3(wrist, palmRef) || 0.001;
+
+  const tips = [8, 12, 16, 20];
+  const pips = [6, 10, 14, 18];
+
+  const fingers = tips.map((tip, i) => {
+    const curl = 1 - Math.min(1, dist3(lm[tip], wrist) / (palmSz * 3.2));
+    return {
+      abovePip: lm[tip].y < lm[pips[i]].y,   // tip above PIP = extended
+      curl,                                      // 0=open  1=fist
+    };
+  });
+
+  const extCount = fingers.filter(f => f.abovePip && f.curl < 0.52).length;
+  const avgCurl  = fingers.reduce((s,f) => s + f.curl, 0) / 4;
+  const allBelow = fingers.every(f => !f.abovePip);          // tips all below PIPs
+
+  // ── ROCK: all tips below PIPs and hand is curled ────────
+  if (allBelow && avgCurl > 0.22) return 'rock';
+
+  // ── SCISSORS: index + middle extended, ring + pinky down ─
+  if (
+    fingers[0].abovePip && fingers[1].abovePip &&
+    !fingers[2].abovePip && !fingers[3].abovePip
+  ) return 'scissors';
+
+  // ── PAPER: 3+ fingers clearly extended ─────────────────
+  if (extCount >= 3) return 'paper';
+
+  // ── Fallback via curl ───────────────────────────────────
+  return avgCurl > 0.38 ? 'rock' : 'paper';
+}
+
+/* ══ UI HELPERS ════════════════════════════════════════════ */
+function setBadge(det) {
+  const b=document.getElementById('hbadge');
+  b.textContent = det ? '✔ Hand Detected' : '✖ No Hand Detected';
+  b.className   = 'hbadge ' + (det?'det':'nodet');
+}
+
+function setGesture(g) {
+  currentGesture=g; setBadge(!!g);
+  const pn=document.getElementById('pName'), pe=document.getElementById('pEmoji');
+  if(g){ pn.textContent=g.toUpperCase(); pn.style.color=COL[g]; pe.textContent=EMOJI[g]; }
+  else { pn.textContent='—'; pn.style.color='var(--mut)'; pe.textContent='👋'; }
+}
+
+function bumpScore(id) {
+  const el=document.getElementById(id);
+  el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+}
+
+function updateScoreUI() {
+  document.getElementById('sWin').textContent  = score.win;
+  document.getElementById('sLose').textContent = score.lose;
+  // progress bar = whoever is leading
+  const leading = Math.max(score.win, score.lose);
+  document.getElementById('mbarFill').style.width = (leading/MAX_PTS*100)+'%';
+  document.getElementById('rnum').textContent = leading+'/'+MAX_PTS;
+}
+
+function setAI(move) {
+  const e=document.getElementById('aiEmoji');
+  e.textContent=EMOJI[move]; e.classList.remove('pop'); void e.offsetWidth; e.classList.add('pop');
+  document.getElementById('aName').textContent=move.toUpperCase();
+  document.getElementById('aName').style.color=COL[move];
+  document.getElementById('aEmoji').textContent=EMOJI[move];
+}
+
+function clearPanels() {
+  ['playerPanel','aiPanel'].forEach(id=>document.getElementById(id).className='pcard');
+  const e=document.getElementById('aiEmoji');
+  e.textContent='🤖'; e.classList.remove('pop');
+  document.getElementById('aName').textContent='—'; document.getElementById('aName').style.color='var(--mut)';
+  document.getElementById('aEmoji').textContent='🤖';
+  document.getElementById('rbanner').textContent=''; document.getElementById('rbanner').className='rbanner';
+}
+
+function addHistory(p,a,r) {
+  history.unshift({p,a,r}); if(history.length>14) history.pop();
+  document.getElementById('histStrip').innerHTML =
+    history.map(h=>`<div class="hchip ${h.r}">${EMOJI[h.p]} vs ${EMOJI[h.a]}</div>`).join('');
+}
+
+function showOv(id)  { document.getElementById(id).classList.add('show'); }
+function hideOv(id)  { document.getElementById(id).classList.remove('show'); }
+
+/* ══ STARTUP COUNTDOWN ══════════════════════════════════════ */
+function runStartup() {
+  showOv('ovStart');
+  const rp=document.getElementById('ringProg'), rn=document.getElementById('ringNum');
+  let t=STARTUP_SEC;
+  rn.textContent=t; rp.style.strokeDashoffset=0;
+
+  
+
+  const iv=setInterval(()=>{
+    t--;
+    rn.textContent=t;
+    rp.style.strokeDashoffset=CIRCUM*(t/STARTUP_SEC);
+    
+    if(t<=0){ clearInterval(iv); hideOv('ovStart'); setTimeout(runRound,350); }
+  },1000);
+}
+
+/* ══ ROUND CALL ANIMATION + SPEECH ═════════════════════════
+   Shows Rock → Paper → Scissors → SHOOT!
+   The overlay stays up through "Shoot" and is hidden by
+   runRound's callback once the sampling window opens.
+══════════════════════════════════════════════════════════ */
+function runRoundCall(done) {
+  const seq   = ['rock','paper','scissors','shoot'];
+  const label = { rock:'ROCK', paper:'PAPER', scissors:'SCISSORS', shoot:'SHOOT!' };
+  const said  = { rock:'Rock', paper:'Paper', scissors:'Scissors', shoot:'Shoot! Hold your pose' };
+  const dur   = { rock:850, paper:850, scissors:850, shoot:400 };
+  const cw    = document.getElementById('callWord');
+  let i=0;
+  showOv('ovCall');
+
+  function next() {
+    if(i>=seq.length){
+      // Keep "SHOOT!" visible — hide handled after sampling
+      done();
+      return;
+    }
+    const w=seq[i];
+    cw.textContent=label[w]; cw.className='call-word '+w;
+    cw.style.animation='none'; void cw.offsetWidth; cw.style.animation='';
+
+    i++;
+    setTimeout(next, dur[seq[i-1]]);
+  }
+  next();
+}
+
+/* ══ ROUND ══════════════════════════════════════════════════ */
+function runRound() {
+  if(isPlaying) return;
+  isPlaying=true;
+  clearPanels();
+  document.getElementById('rinfo').textContent='Get ready…';
+
+  runRoundCall(()=>{
+    // After "Shoot!" — give the player 1.5 s to settle their gesture.
+    // Sample currentGesture every 80 ms and pick the majority vote.
+    const SAMPLE_MS  = 1500;
+    const SAMPLE_INT = 80;
+
+    // Show a "hold" message inside the call overlay
+    const cw = document.getElementById('callWord');
+    cw.textContent = 'HOLD!';
+    cw.className   = 'call-word shoot';
+    cw.style.animation='none'; void cw.offsetWidth; cw.style.animation='';
+
+    const votes = {};
+    const iv = setInterval(()=>{
+      if(currentGesture) votes[currentGesture] = (votes[currentGesture]||0) + 1;
+    }, SAMPLE_INT);
+
+    setTimeout(()=>{
+      clearInterval(iv);
+      hideOv('ovCall');
+
+      // Pick gesture with most votes
+      let player = null, best = 0;
+      for(const [g, count] of Object.entries(votes)){
+        if(count > best){ best = count; player = g; }
+      }
+
+      // Show locked gesture on player panel
+      if(player){
+        document.getElementById('pName').textContent  = player.toUpperCase();
+        document.getElementById('pName').style.color  = COL[player];
+        document.getElementById('pEmoji').textContent = EMOJI[player];
+      }
+
+      document.getElementById('rinfo').textContent = player
+        ? `You played ${EMOJI[player]} ${player}`
+        : 'No hand detected…';
+
+      document.getElementById('aiThink').classList.add('show');
+      document.getElementById('aiEmoji').textContent = '🤔';
+
+      setTimeout(()=>{
+        document.getElementById('aiThink').classList.remove('show');
+        const ai = MOVES[Math.floor(Math.random()*3)];
+        setAI(ai);
+        resolveRound(player, ai);
+      }, 700);
+
+    }, SAMPLE_MS);
+  });
+}
+
+function resolveRound(player,ai) {
+  const banner=document.getElementById('rbanner');
+  const info=document.getElementById('rinfo');
+  const pp=document.getElementById('playerPanel');
+  const ap=document.getElementById('aiPanel');
+  let res,cls,spk;
+  let counted=false; // only count if someone actually wins
+
+  if(!player){
+    res='⚠ NO HAND!'; cls='d'; spk='No hand detected. Round does not count.';
+    info.textContent='No gesture detected — round replayed.';
+  } else if(player===ai){
+    res='⚡ DRAW!'; cls='d'; spk='Draw! Round replayed.';
+    info.textContent=`${EMOJI[player]} ${player} vs ${EMOJI[ai]} ${ai} — Draw, round replayed`;
+    addHistory(player,ai,'d');
+  } else if(
+    (player==='rock'&&ai==='scissors')||
+    (player==='scissors'&&ai==='paper')||
+    (player==='paper'&&ai==='rock')
+  ){
+    res='🏆 YOU WIN!'; cls='w'; score.win++; spk='You win this round!';
+    info.textContent=`${EMOJI[player]} ${player} beats ${EMOJI[ai]} ${ai}`;
+    addHistory(player,ai,'w'); bumpScore('sWin'); counted=true;
+  } else {
+    res='💀 AI WINS!'; cls='l'; score.lose++; spk='AI wins this round!';
+    info.textContent=`${EMOJI[ai]} ${ai} beats ${EMOJI[player]} ${player}`;
+    addHistory(player,ai,'l'); bumpScore('sLose'); counted=true;
+  }
+
+  banner.textContent=res; banner.className='rbanner '+cls;
+  pp.className='pcard g'+cls;
+  ap.className='pcard g'+(cls==='w'?'l':cls==='l'?'w':'d');
+
+  updateScoreUI();
+
+
+  // Only end game when someone reaches MAX_PTS wins
+  const ended = score.win>=MAX_PTS || score.lose>=MAX_PTS;
+
+  setTimeout(()=>{
+    pp.className='pcard'; ap.className='pcard';
+    isPlaying=false;
+    if(ended) setTimeout(showGameOver,300);
+    else       setTimeout(runRound,400);
+  }, RESULT_SEC*1000);
+}
+
+/* ══ GAME OVER ══════════════════════════════════════════════ */
+function showGameOver() {
+  const crown=document.getElementById('goCrown');
+  const title=document.getElementById('goTitle');
+  const gsc=document.getElementById('goScore');
+  const bar=document.getElementById('goRFill');
+
+  let cls,txt,em,spk;
+  if(score.win>score.lose){ cls='vic'; txt='YOU WIN THE MATCH!'; em='🏆'; spk='Congratulations! You win the match!'; }
+  else { cls='def'; txt='AI WINS THE MATCH!'; em='🤖'; spk='AI wins the match. Better luck next time!'; }
+
+  crown.textContent=em; title.textContent=txt; title.className='go-title '+cls;
+  gsc.textContent=score.win+' — '+score.lose;
+
+  showOv('ovGameOver');
+  
+
+  bar.style.transition='none'; bar.style.width='0%'; void bar.offsetWidth;
+  bar.style.transition=`width ${RESTART_SEC}s linear`; bar.style.width='100%';
+
+  setTimeout(()=>{ hideOv('ovGameOver'); resetGame(); runStartup(); }, RESTART_SEC*1000);
+}
+
+function resetGame() {
+  score={win:0,lose:0}; history=[];
+  updateScoreUI();
+  document.getElementById('histStrip').innerHTML='';
+  document.getElementById('rinfo').textContent='Game starts soon…';
+  clearPanels();
+}
+
+/* ══ BOOT ═══════════════════════════════════════════════════ */
+updateScoreUI();
+setTimeout(runStartup,1200);
+</script>
+</body>
+</html>
